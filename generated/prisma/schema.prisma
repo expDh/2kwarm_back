@@ -1,0 +1,24 @@
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+
+model Users {
+  id           Int      @id @default(autoincrement())
+  
+  steamId      String   @unique
+  nickname     String
+  avatar       String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  @@map("user")
+}
