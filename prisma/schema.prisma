@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              Int       @id @default(autoincrement()) @unique
+  name            String?   @db.VarChar(255)
+  steamid64       String?   @unique
+  avatar          String?   @db.VarChar(255)
+  profile_url     String?   @db.VarChar(255)
+  real_name       String?   @db.VarChar(255)
+  balance         Int?      @default(0)
+  date_of_birth   Int?
+  last_online     Int?
+  sid             String?   @db.VarChar(255)
+  group_id        Int?      @default(3)
+  virtual_balance Int?      @default(0)
+  email           String?   @db.VarChar(255)
+  discord         String?   @db.VarChar(255)
+  vkURL           String?   @db.VarChar(255)
+  verified        Int?      @default(0)
+  friendTrades    Int?      @default(0)
+  expired_group   DateTime?
+  vip_test_used   Int?      @default(0)
+  xp              Int?      @default(0)
+  trade_offer     String?
+  vk_subscribed   Int?      @default(0)
+  socials         Int?      @default(0)
+  ip              String?   @db.VarChar(50)
+  registered_at   DateTime? @default(now())
+  disabled_coin   Int?      @default(0)
+  role Roles @default(user)
+
+  @@map("users")
+}
+
+enum Roles {
+  user
+  admin
+}
