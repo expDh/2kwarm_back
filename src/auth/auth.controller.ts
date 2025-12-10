@@ -25,7 +25,7 @@ export class AuthController {
     login() {
         // Passport автоматически делает redirect → Steam
     }
-
+  
     @UseGuards(SteamAuthGuard)
     @Get("/steam/return")
     async logined(@Req() req: any, @Res() res: Response) {
