@@ -2,7 +2,6 @@ import { HttpService } from "@nestjs/axios";
 import { Controller, Res, Get, Req, UseGuards, HttpException, HttpStatus } from "@nestjs/common";
 import type { Response, Request } from "express";
 import * as jwt from "jsonwebtoken";
-import { catchError, lastValueFrom, map } from "rxjs";
 import SteamID from "steamid";
 
 import { UserService } from "src/user/user.service";
@@ -10,134 +9,281 @@ import { UtilsService } from "src/utils/utils.service";
 import { UserDTO } from "src/dto/user.dto";
 import { SteamAuthGuard } from "./steam.auth.guard";
 
-
 import { SkipThrottle } from "@nestjs/throttler";
 
 @SkipThrottle()
 @Controller("auth")
-@SkipThrottle()
 export class AuthController {
-    constructor(private usersService: UserService, private utilsService: UtilsService, private httpService: HttpService) { }
+    constructor(
+        private usersService: UserService,
+        private utilsService: UtilsService,
+        private httpService: HttpService
+    ) {}
 
     @UseGuards(SteamAuthGuard)
     @Get('/steam')
     login() {
-    
+        // Passport автоматически делает redirect → Steam
     }
 
-@UseGuards(SteamAuthGuard)
-@Get("/steam/return")
-async logined(@Req() req: any, @Res() res: Response) {
-  const userFromSteam = req.user;
+    @UseGuards(SteamAuthGuard)
+    @Get("/steam/return")
+    async logined(@Req() req: any, @Res() res: Response) {
+        const s = req.user;
 
-  const sid = new SteamID(userFromSteam.steamid64 || userFromSteam.id);
+        const sid = new SteamID(s.steamid64 || s.id);
 
-  const userDTO: UserDTO = {
-    name: userFromSteam.name || userFromSteam.displayName,
-    steamid64: userFromSteam.steamid64 || userFromSteam.id,
-    sid: sid.getSteam2RenderedID(true),
-    avatar: userFromSteam.avatar || "",
-    profile_url: `https://steamcommunity.com/profiles/${userFromSteam.steamid64}`,
-    real_name: userFromSteam.real_name || null,
-    last_online: this.utilsService.currentTimestamp(),
-  };
+        const userDTO: UserDTO = {
+            name: s.name || s.displayName,
+            steamid64: s.steamid64 || s.id,
+            sid: sid.getSteam2RenderedID(true),
+            avatar: s.avatar || "",
+            profile_url: `https://steamcommunity.com/profiles/${s.steamid64}`,
+            real_name: s.real_name || null,
+            last_online: this.utilsService.currentTimestamp(),
+        };
 
-  const user = await this.usersService.verifyOrAdd(userDTO);
+        const user = await this.usersService.verifyOrAdd(userDTO);
+
+        // ACCESS token — короткий
+        const accessToken = jwt.sign(
+            {
+                steamid64: user.steamid64,
+                user_id: user.id,
+                name: user.name,
+                avatar: user.avatar,
+                ip: req.headers["x-forwarded-for"] || req.ip,
+                ua: req.headers["user-agent"] || "",
+            },
+            process.env.JWT_ACCESS_SECRET!,
+            { expiresIn: "3d" }
+        );
+
+        // REFRESH token — длинный
+        const refreshToken = jwt.sign(
+            {
+                steamid64: user.steamid64,
+                user_id: user.id,
+            },
+            process.env.JWT_REFRESH_SECRET!,
+            { expiresIn: "180d" }
+        );
+
+        // 💡 Токены передаются через redirect на фронт (гарантировано работает)
+        return res.redirect(
+            `${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`
+        );
+    }
+
+
+    // Проверка токена на фронте
+    @Get("/")
+    async authHome(@Req() req: Request, @Res() res: Response) {
+        const { access, refresh } = req.query;
+
+        if (!access || !refresh) {
+            return res.status(400).json({ message: "Tokens not provided" });
+        }
+
+        try {
+            const decoded: any = jwt.verify(
+                access as string,
+                process.env.JWT_ACCESS_SECRET!
+            );
+
+            return res.json({
+                message: "Logged in",
+                user: {
+                    steamid64: decoded.steamid64,
+                    name: decoded.name,
+                    avatar: decoded.avatar,
+                    user_id: decoded.user_id,
+                },
+                tokens: { access, refresh },
+            });
+        } catch (err) {
+            return res.status(401).json({ message: "Invalid access token" });
+        }
+    }
+
+
+    @Get("/refresh")
+    async refresh(@Req() req: Request, @Res() res: Response) {
+        try {
+            const refresh = req.query.refresh as string;
+            if (!refresh) throw new HttpException("No refresh token", 401);
+
+            const decoded: any = jwt.verify(
+                refresh,
+                process.env.JWT_REFRESH_SECRET!
+            );
+
+            const user = await this.usersService.findBySteamID(decoded.steamid64);
+            if (!user) throw new HttpException("User not found", 401);
+
+
+            const newAccess = jwt.sign(
+                {
+                    steamid64: user.steamid64,
+                    user_id: user.id,
+                    name: user.name,
+                    avatar: user.avatar,
+                },
+                process.env.JWT_ACCESS_SECRET!,
+                { expiresIn: "3d" }
+            );
+
+            return res.json({ access: newAccess });
+        } catch {
+            throw new HttpException("Invalid refresh token", 401);
+        }
+    }
+}
+
+
+
+
+
+// import { HttpService } from "@nestjs/axios";
+// import { Controller, Res, Get, Req, UseGuards, HttpException, HttpStatus } from "@nestjs/common";
+// import type { Response, Request } from "express";
+// import * as jwt from "jsonwebtoken";
+// import { catchError, lastValueFrom, map } from "rxjs";
+// import SteamID from "steamid";
+
+// import { UserService } from "src/user/user.service";
+// import { UtilsService } from "src/utils/utils.service";
+// import { UserDTO } from "src/dto/user.dto";
+// import { SteamAuthGuard } from "./steam.auth.guard";
+
+
+// import { SkipThrottle } from "@nestjs/throttler";
+
+// @SkipThrottle()
+// @Controller("auth")
+// @SkipThrottle()
+// export class AuthController {
+//     constructor(private usersService: UserService, private utilsService: UtilsService, private httpService: HttpService) { }
+
+//     @UseGuards(SteamAuthGuard)
+//     @Get('/steam')
+//     login() {
+    
+//     }
+
+// @UseGuards(SteamAuthGuard)
+// @Get("/steam/return")
+// async logined(@Req() req: any, @Res() res: Response) {
+//   const userFromSteam = req.user;
+
+//   const sid = new SteamID(userFromSteam.steamid64 || userFromSteam.id);
+
+//   const userDTO: UserDTO = {
+//     name: userFromSteam.name || userFromSteam.displayName,
+//     steamid64: userFromSteam.steamid64 || userFromSteam.id,
+//     sid: sid.getSteam2RenderedID(true),
+//     avatar: userFromSteam.avatar || "",
+//     profile_url: `https://steamcommunity.com/profiles/${userFromSteam.steamid64}`,
+//     real_name: userFromSteam.real_name || null,
+//     last_online: this.utilsService.currentTimestamp(),
+//   };
+
+//   const user = await this.usersService.verifyOrAdd(userDTO);
 
   
-  const accessToken = jwt.sign(
-    {
-      steamid64: user.steamid64,
-      user_id: user.id,
-      name: user.name,
-      avatar: user.avatar,
-      dest: req.headers["x-forwarded-for"] || req.ip,
-      mky: req.headers["user-agent"] || "",
-    },
-    process.env.JWT_SECRET!,
-    { expiresIn: "3d" }
-  );
+//   const accessToken = jwt.sign(
+//     {
+//       steamid64: user.steamid64,
+//       user_id: user.id,
+//       name: user.name,
+//       avatar: user.avatar,
+//       dest: req.headers["x-forwarded-for"] || req.ip,
+//       mky: req.headers["user-agent"] || "",
+//     },
+//     process.env.JWT_SECRET!,
+//     { expiresIn: "3d" }
+//   );
 
 
-  const refreshToken = jwt.sign(
-    { steamid64: user.steamid64, user_id: user.id },
-    process.env.JWT_SECRET!,
-    { expiresIn: "180d" }
-  );
+//   const refreshToken = jwt.sign(
+//     { steamid64: user.steamid64, user_id: user.id },
+//     process.env.JWT_SECRET!,
+//     { expiresIn: "180d" }
+//   );
 
 
-  res.cookie("access", accessToken, { httpOnly: false, maxAge: 60 * 1000 });
-  res.cookie("refresh", refreshToken, { httpOnly: false, maxAge: 180 * 24 * 60 * 60 * 1000 });
+//   res.cookie("access", accessToken, { httpOnly: false, maxAge: 60 * 1000 });
+//   res.cookie("refresh", refreshToken, { httpOnly: false, maxAge: 180 * 24 * 60 * 60 * 1000 });
 
 
-  // return res.redirect(`${process.env.STEAM_REALM}/auth/?access=${accessToken}&refresh=${refreshToken}`);
-  return res.status(200).redirect(`${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`);
-}
+//   // return res.redirect(`${process.env.STEAM_REALM}/auth/?access=${accessToken}&refresh=${refreshToken}`);
+//   return res.status(200).redirect(`${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`);
+// }
 
 
-@Get('/')
-async authHome(@Req() req: Request, @Res() res: Response) {
-  const { access, refresh } = req.query;
+// @Get('/')
+// async authHome(@Req() req: Request, @Res() res: Response) {
+//   const { access, refresh } = req.query;
 
-  if (!access || !refresh) {
-    return res.status(400).json({ message: 'Tokens not provided' });
-  }
+//   if (!access || !refresh) {
+//     return res.status(400).json({ message: 'Tokens not provided' });
+//   }
 
   
-  try {
-    const decoded: any = jwt.verify(access as string, process.env.JWT_SECRET!);
+//   try {
+//     const decoded: any = jwt.verify(access as string, process.env.JWT_SECRET!);
 
-    return res.status(200).json({
-      message: 'Logged in successfully',
-      user: {
-        steamid64: decoded.steamid64,
-        name: decoded.name,
-        avatar: decoded.avatar,
-        user_id: decoded.user_id,
-      },
-      tokens: { access, refresh },
-    });
-  } catch (err) {
-    return res.status(401).json({ message: 'Invalid access token' });
-  }
-}
-
-
-
-@Get('/refresh')
-async refresh(@Req() req: Request, @Res() res: Response) {
-  try {
-    const refreshToken = req.cookies['refresh'];
-    if (!refreshToken) throw new HttpException('Refresh token not found', 401);
-
-    const decoded: any = jwt.verify(refreshToken, process.env.JWT_SECRET!);
-
-    const user = await this.usersService.findBySteamID(decoded.steamid64);
-    if (!user) throw new HttpException('User not found', 401);
+//     return res.status(200).json({
+//       message: 'Logged in successfully',
+//       user: {
+//         steamid64: decoded.steamid64,
+//         name: decoded.name,
+//         avatar: decoded.avatar,
+//         user_id: decoded.user_id,
+//       },
+//       tokens: { access, refresh },
+//     });
+//   } catch (err) {
+//     return res.status(401).json({ message: 'Invalid access token' });
+//   }
+// }
 
 
-    const newAccessToken = jwt.sign(
-      {
-        steamid64: user.steamid64,
-        user_id: user.id,
-        name: user.name,
-        avatar: user.avatar,
-      },
-      process.env.JWT_SECRET!,
-      { expiresIn: '1m' } 
-    );
 
-    res.cookie('access', newAccessToken, { httpOnly: false, maxAge: 60 * 1000 });
+// @Get('/refresh')
+// async refresh(@Req() req: Request, @Res() res: Response) {
+//   try {
+//     const refreshToken = req.cookies['refresh'];
+//     if (!refreshToken) throw new HttpException('Refresh token not found', 401);
 
-    return res.status(200).json({ access: newAccessToken });
+//     const decoded: any = jwt.verify(refreshToken, process.env.JWT_SECRET!);
 
-  } catch (err) {
-    throw new HttpException('Invalid refresh token', 401);
-  }
-}
+//     const user = await this.usersService.findBySteamID(decoded.steamid64);
+//     if (!user) throw new HttpException('User not found', 401);
 
 
-}
+//     const newAccessToken = jwt.sign(
+//       {
+//         steamid64: user.steamid64,
+//         user_id: user.id,
+//         name: user.name,
+//         avatar: user.avatar,
+//       },
+//       process.env.JWT_SECRET!,
+//       { expiresIn: '1m' } 
+//     );
+
+//     res.cookie('access', newAccessToken, { httpOnly: false, maxAge: 60 * 1000 });
+
+//     return res.status(200).json({ access: newAccessToken });
+
+//   } catch (err) {
+//     throw new HttpException('Invalid refresh token', 401);
+//   }
+// }
+
+
+// }
 
 
 
