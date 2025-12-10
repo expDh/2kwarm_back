@@ -70,7 +70,8 @@ async logined(@Req() req: any, @Res() res: Response) {
   res.cookie("refresh", refreshToken, { httpOnly: false, maxAge: 180 * 24 * 60 * 60 * 1000 });
 
 
-  return res.status(200).redirect(`${process.env.STEAM_REALM}/auth/?access=${accessToken}&refresh=${refreshToken}`);
+  // return res.redirect(`${process.env.STEAM_REALM}/auth/?access=${accessToken}&refresh=${refreshToken}`);
+  return res.status(200).redirect(`${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`);
 }
 
 

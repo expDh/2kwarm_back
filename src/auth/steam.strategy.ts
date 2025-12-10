@@ -10,12 +10,14 @@ export class SteamStrategy extends PassportStrategy(Strategy, 'steam') {
       returnURL: process.env.STEAM_RETURN_URL!,
       realm: process.env.STEAM_REALM!,
       apiKey: process.env.STEAM_API_KEY!,
-      
     });
-   
+      console.log(process.env.STEAM_RETURN_URL)
+      console.log(process.env.STEAM_REALM)
+      console.log(process.env.STEAM_API_KEY)
   }
-
+  
   async validate(identifier: string, profile: any): Promise<any> {
+  
    
     let user = await this.prisma.user.findUnique({
       where: { steamid64: profile.id },
