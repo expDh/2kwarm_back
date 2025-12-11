@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -12,6 +12,8 @@ import { ProfileController } from './profile/profile.controller';
 import { AuthController } from './auth/auth.controller';
 import { UtilsModule } from './utils/utils.mudule';
 import { HttpModule } from '@nestjs/axios';
+import { AuthWhitelistMiddleware } from 'middleware/auth-whitelist.middleware';
+// import { AuthRedirectMiddleware } from './middlewares/auth-redirect.middleware';
 
 
 @Module({
@@ -19,4 +21,10 @@ import { HttpModule } from '@nestjs/axios';
   controllers: [AppController,ProfileController,AuthController],
   providers: [AppService, ],
 })
-export class AppModule {}
+export class AppModule {
+  // configure(consumer: MiddlewareConsumer) {
+  //   consumer
+  //     .apply(AuthRedirectMiddleware)
+  //     .forRoutes('*');   // <--- работает на все пути
+  // }
+}

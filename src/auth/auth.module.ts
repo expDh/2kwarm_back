@@ -14,6 +14,7 @@ import { UtilsModule } from 'src/utils/utils.mudule';
   imports: [UserModule,PassportModule.register({ session: true }),HttpModule,UtilsModule],
   controllers: [AuthController],
   providers: [AuthService,SteamStrategy,UtilsService],
+  exports:[AuthService]
   
 })
 export class AuthModule {}

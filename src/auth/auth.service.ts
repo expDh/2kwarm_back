@@ -1,15 +1,61 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UserService } from '../user/user.service';
-
+import * as jwt from 'jsonwebtoken';
+import { ConfigService } from '@nestjs/config';
+import { User } from '@prisma/client';
 @Injectable()
 export class AuthService {
- 
- 
+  constructor(private configService: ConfigService) {}
 
-  
-  
+  createAccessToken(user: User) {
+    return jwt.sign(
+      {
+        steamid64: user.steamid64,
+        user_id: user.id,
+        name: user.name,
+        avatar: user.avatar,
+      },
+      this.configService.get<string>('JWT_ACCESS_SECRET')!,
+      { expiresIn: '1h' },
+    );
+  }
+
+  createRefreshToken(user: User) {
+    return jwt.sign(
+      {
+        steamid64: user.steamid64,
+        user_id: user.id,
+      },
+      this.configService.get<string>('JWT_REFRESH_SECRET')!,
+      { expiresIn: '180d' },
+    );
+  }
+
+  verifyAccessToken(token: string) {
+    try {
+      return jwt.verify(
+        token,
+        this.configService.get<string>('JWT_ACCESS_SECRET')!,
+      );
+    } catch (err) {
+      return null;
+    }
+  }
+
+  verifyRefreshToken(token: string) {
+    try {
+      return jwt.verify(
+        token,
+        this.configService.get<string>('JWT_REFRESH_SECRET')!,
+      );
+    } catch (err) {
+      return null;
+    }
+  }
 }
+
+
 
 
 
@@ -56,7 +102,7 @@ export class AuthService {
 //       },
 //       {
 //         expiresIn: '30d',
-//         secret: process.env.JWT_SECRET, 
+//         secret: process.env.JWT_SECRET,
 //       },
 //     );
 //   }
@@ -83,7 +129,6 @@ export class AuthService {
 //     }
 //   }
 // }
-
 
 // import { Injectable } from '@nestjs/common';
 // import { JwtService } from '@nestjs/jwt';

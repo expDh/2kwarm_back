@@ -1,144 +1,148 @@
-import { HttpService } from "@nestjs/axios";
-import { Controller, Res, Get, Req, UseGuards, HttpException, HttpStatus } from "@nestjs/common";
-import type { Response, Request } from "express";
-import * as jwt from "jsonwebtoken";
-import SteamID from "steamid";
+import { HttpService } from '@nestjs/axios';
+import {
+  Controller,
+  Res,
+  Get,
+  Req,
+  UseGuards,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import type { Response, Request } from 'express';
+import * as jwt from 'jsonwebtoken';
+import SteamID from 'steamid';
 
-import { UserService } from "src/user/user.service";
-import { UtilsService } from "src/utils/utils.service";
-import { UserDTO } from "src/dto/user.dto";
-import { SteamAuthGuard } from "./steam.auth.guard";
+import { UserService } from 'src/user/user.service';
+import { UtilsService } from 'src/utils/utils.service';
+import { UserDTO } from 'src/dto/user.dto';
+import { SteamAuthGuard } from './steam.auth.guard';
 
-import { SkipThrottle } from "@nestjs/throttler";
+import { SkipThrottle } from '@nestjs/throttler';
+import { AuthService } from './auth.service';
 
 @SkipThrottle()
-@Controller("auth")
+@Controller('auth')
 export class AuthController {
-    constructor(
-        private usersService: UserService,
-        private utilsService: UtilsService,
-        private httpService: HttpService
-    ) {}
+  constructor(
+    private usersService: UserService,
+    private authService: AuthService,
+    private utilsService: UtilsService,
+    private httpService: HttpService,
+  ) {}
 
-    @UseGuards(SteamAuthGuard)
-    @Get('/steam')
-    login() {
-        // Passport автоматически делает redirect → Steam
-    }
-  
-    @UseGuards(SteamAuthGuard)
-    @Get("/steam/return")
-    async logined(@Req() req: any, @Res() res: Response) {
-        const s = req.user;
+  @UseGuards(SteamAuthGuard)
+  @Get('/steam')
+  login() {}
 
-        const sid = new SteamID(s.steamid64 || s.id);
+  @UseGuards(SteamAuthGuard)
+  @Get('/steam/return')
+  async logined(@Req() req: any, @Res() res: Response) {
+    const s = req.user;
+    const sid = new SteamID(s.steamid64 || s.id);
 
-        const userDTO: UserDTO = {
-            name: s.name || s.displayName,
-            steamid64: s.steamid64 || s.id,
-            sid: sid.getSteam2RenderedID(true),
-            avatar: s.avatar || "",
-            profile_url: `https://steamcommunity.com/profiles/${s.steamid64}`,
-            real_name: s.real_name || null,
-            last_online: this.utilsService.currentTimestamp(),
-        };
+    const userDTO: UserDTO = {
+      name: s.name || s.displayName,
+      steamid64: s.steamid64 || s.id,
+      sid: sid.getSteam2RenderedID(true),
+      avatar: s.avatar || '',
+      profile_url: `https://steamcommunity.com/profiles/${s.steamid64}`,
+      real_name: s.real_name || null,
+      last_online: this.utilsService.currentTimestamp(),
+    };
 
-        const user = await this.usersService.verifyOrAdd(userDTO);
+    const user = await this.usersService.verifyOrAdd(userDTO);
 
-        // ACCESS token — короткий
-        const accessToken = jwt.sign(
-            {
-                steamid64: user.steamid64,
-                user_id: user.id,
-                name: user.name,
-                avatar: user.avatar,
-                ip: req.headers["x-forwarded-for"] || req.ip,
-                ua: req.headers["user-agent"] || "",
-            },
-            process.env.JWT_ACCESS_SECRET!,
-            { expiresIn: "3d" }
-        );
+    const accessToken = this.authService.createAccessToken(user);
+    const refreshToken = this.authService.createRefreshToken(user);
 
-        // REFRESH token — длинный
-        const refreshToken = jwt.sign(
-            {
-                steamid64: user.steamid64,
-                user_id: user.id,
-            },
-            process.env.JWT_REFRESH_SECRET!,
-            { expiresIn: "180d" }
-        );
+    res.cookie('access', accessToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      maxAge: 3 * 24 * 60 * 60 * 1000,
+    });
 
-        // 💡 Токены передаются через redirect на фронт (гарантировано работает)
-        return res.redirect(
-            `${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`
-        );
+    res.cookie('refresh', refreshToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      maxAge: 180 * 24 * 60 * 60 * 1000,
+    });
+    return res.redirect(
+      `${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`,
+    );
+  }
+
+  @Get('/')
+  async authHome(@Req() req: Request, @Res() res: Response) {
+    const { access, refresh } = req.query;
+
+    if (!access || !refresh) {
+      return res.status(400).json({ message: 'Tokens not provided' });
     }
 
+    try {
+      const decoded: any = jwt.verify(
+        access as string,
+        process.env.JWT_ACCESS_SECRET!,
+      );
 
-    // Проверка токена на фронте
-    @Get("/")
-    async authHome(@Req() req: Request, @Res() res: Response) {
-        const { access, refresh } = req.query;
-
-        if (!access || !refresh) {
-            return res.status(400).json({ message: "Tokens not provided" });
-        }
-
-        try {
-            const decoded: any = jwt.verify(
-                access as string,
-                process.env.JWT_ACCESS_SECRET!
-            );
-
-            return res.json({
-                message: "Logged in",
-                user: {
-                    steamid64: decoded.steamid64,
-                    name: decoded.name,
-                    avatar: decoded.avatar,
-                    user_id: decoded.user_id,
-                },
-                tokens: { access, refresh },
-            });
-        } catch (err) {
-            return res.status(401).json({ message: "Invalid access token" });
-        }
+      return res.json({
+        message: 'Logged in',
+        user: {
+          steamid64: decoded.steamid64,
+          name: decoded.name,
+          avatar: decoded.avatar,
+          user_id: decoded.user_id,
+        },
+        tokens: { access, refresh },
+      });
+    } catch (err) {
+      return res.status(401).json({ message: 'Invalid access token' });
     }
+  }
 
+  @Get('/refresh')
+  async refresh(@Req() req: Request, @Res() res: Response) {
+    const refresh = (req.query.refresh as string) || req.cookies?.refresh;
+    if (!refresh) throw new HttpException('No refresh token', 401);
 
-    @Get("/refresh")
-    async refresh(@Req() req: Request, @Res() res: Response) {
-        try {
-            const refresh = req.query.refresh as string;
-            if (!refresh) throw new HttpException("No refresh token", 401);
+    const decoded = this.authService.verifyRefreshToken(
+      refresh,
+    ) as jwt.JwtPayload;
+    if (!decoded) throw new HttpException('Invalid refresh token', 401);
 
-            const decoded: any = jwt.verify(
-                refresh,
-                process.env.JWT_REFRESH_SECRET!
-            );
+    const user = await this.usersService.findBySteamID(decoded.steamid64);
+    if (!user) throw new HttpException('User not found', 401);
 
-            const user = await this.usersService.findBySteamID(decoded.steamid64);
-            if (!user) throw new HttpException("User not found", 401);
+    const newAccess = this.authService.createAccessToken(user);
+    const newRefresh = this.authService.createRefreshToken(user);
 
+    res.cookie('access', newAccess, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      maxAge: 3 * 24 * 60 * 60 * 1000,
+    });
 
-            const newAccess = jwt.sign(
-                {
-                    steamid64: user.steamid64,
-                    user_id: user.id,
-                    name: user.name,
-                    avatar: user.avatar,
-                },
-                process.env.JWT_ACCESS_SECRET!,
-                { expiresIn: "3d" }
-            );
+    res.cookie('refresh', newRefresh, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      maxAge: 180 * 24 * 60 * 60 * 1000,
+    });
 
-            return res.json({ access: newAccess });
-        } catch {
-            throw new HttpException("Invalid refresh token", 401);
-        }
-    }
+    return res.redirect(
+      `${process.env.FRONT_URL}/auth/?access=${newAccess}&refresh=${newRefresh}`,
+    );
+    // return res.json(
+    //   { message:"Update token",access: newAccess, refresh: newRefresh });
+  }
 }
+
+
+
+
 
 
 
@@ -156,7 +160,6 @@ export class AuthController {
 // import { UserDTO } from "src/dto/user.dto";
 // import { SteamAuthGuard } from "./steam.auth.guard";
 
-
 // import { SkipThrottle } from "@nestjs/throttler";
 
 // @SkipThrottle()
@@ -168,7 +171,7 @@ export class AuthController {
 //     @UseGuards(SteamAuthGuard)
 //     @Get('/steam')
 //     login() {
-    
+
 //     }
 
 // @UseGuards(SteamAuthGuard)
@@ -190,7 +193,6 @@ export class AuthController {
 
 //   const user = await this.usersService.verifyOrAdd(userDTO);
 
-  
 //   const accessToken = jwt.sign(
 //     {
 //       steamid64: user.steamid64,
@@ -204,22 +206,18 @@ export class AuthController {
 //     { expiresIn: "3d" }
 //   );
 
-
 //   const refreshToken = jwt.sign(
 //     { steamid64: user.steamid64, user_id: user.id },
 //     process.env.JWT_SECRET!,
 //     { expiresIn: "180d" }
 //   );
 
-
 //   res.cookie("access", accessToken, { httpOnly: false, maxAge: 60 * 1000 });
 //   res.cookie("refresh", refreshToken, { httpOnly: false, maxAge: 180 * 24 * 60 * 60 * 1000 });
-
 
 //   // return res.redirect(`${process.env.STEAM_REALM}/auth/?access=${accessToken}&refresh=${refreshToken}`);
 //   return res.status(200).redirect(`${process.env.FRONT_URL}/auth/?access=${accessToken}&refresh=${refreshToken}`);
 // }
-
 
 // @Get('/')
 // async authHome(@Req() req: Request, @Res() res: Response) {
@@ -229,7 +227,6 @@ export class AuthController {
 //     return res.status(400).json({ message: 'Tokens not provided' });
 //   }
 
-  
 //   try {
 //     const decoded: any = jwt.verify(access as string, process.env.JWT_SECRET!);
 
@@ -248,8 +245,6 @@ export class AuthController {
 //   }
 // }
 
-
-
 // @Get('/refresh')
 // async refresh(@Req() req: Request, @Res() res: Response) {
 //   try {
@@ -261,7 +256,6 @@ export class AuthController {
 //     const user = await this.usersService.findBySteamID(decoded.steamid64);
 //     if (!user) throw new HttpException('User not found', 401);
 
-
 //     const newAccessToken = jwt.sign(
 //       {
 //         steamid64: user.steamid64,
@@ -270,7 +264,7 @@ export class AuthController {
 //         avatar: user.avatar,
 //       },
 //       process.env.JWT_SECRET!,
-//       { expiresIn: '1m' } 
+//       { expiresIn: '1m' }
 //     );
 
 //     res.cookie('access', newAccessToken, { httpOnly: false, maxAge: 60 * 1000 });
@@ -282,25 +276,7 @@ export class AuthController {
 //   }
 // }
 
-
 // }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // import { HttpService } from "@nestjs/axios";
 // import { Controller, Res, Get, Req, UseGuards, HttpException } from "@nestjs/common";
@@ -313,7 +289,6 @@ export class AuthController {
 // import { UtilsService } from "src/utils/utils.service";
 // import { UserDTO } from "src/dto/user.dto";
 // import { SteamAuthGuard } from "./steam.auth.guard";
-
 
 // import { SkipThrottle } from "@nestjs/throttler";
 
@@ -379,25 +354,6 @@ export class AuthController {
 // }
 // }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //     @Get('/steam/return')
 // @UseGuards(SteamAuthGuard)
 // async logined(@Req() req: any, @Res() res: Response) {
@@ -442,55 +398,50 @@ export class AuthController {
 
 // }}
 
-  //   @UseGuards(SteamAuthGuard)
-  //   @Get("/steam/return")
-  //   async logined(@Req() req: any, @Res() res: Response) {
-  //       const sid = new SteamID(req.user._json.steamid);
-  //       const userDTO: UserDTO = {
-  //           name: req.user._json.personaname,
-  //           steamid64: req.user._json.steamid,
-  //           sid: sid.getSteam2RenderedID(true),
-  //           avatar: req.user.photos[2].value,
-  //           profile_url: req.user._json.profileurl,
-  //           real_name: req.user?._json?.realname,
-  //           last_online: this.utilsService.currentTimestamp()
-  //       }
-  //       const user = await this.usersService.verifyOrAdd(userDTO);
+//   @UseGuards(SteamAuthGuard)
+//   @Get("/steam/return")
+//   async logined(@Req() req: any, @Res() res: Response) {
+//       const sid = new SteamID(req.user._json.steamid);
+//       const userDTO: UserDTO = {
+//           name: req.user._json.personaname,
+//           steamid64: req.user._json.steamid,
+//           sid: sid.getSteam2RenderedID(true),
+//           avatar: req.user.photos[2].value,
+//           profile_url: req.user._json.profileurl,
+//           real_name: req.user?._json?.realname,
+//           last_online: this.utilsService.currentTimestamp()
+//       }
+//       const user = await this.usersService.verifyOrAdd(userDTO);
 
-  //       const token = jwt.sign({
-  //           steamid64: user.steamid64,
-  //           avatar: user?.avatar,
-  //           name: user?.name,
-  //           user_id: user.id,
-  //           dest: req.headers["x-forwarded-for"],
-  //           mky: req.headers["user-agent"],
-  //           exp: this.utilsService.currentTimestamp() + 15552000
-  //       }, process.env.JWT_SECRET!);
-  //       const cookie = req.cookies?.authentication;
-  //       if (cookie)
-  //           res.clearCookie("authentication", {
-  //               domain: process.env.DOMAIN_COOKIE,
-  //               httpOnly: false,
-  //               sameSite: "none",
-  //               secure: true,
-  //               maxAge: 15552000000
-  //           });
-  //       res.cookie("authentication", token, {
-  //           domain: process.env.DOMAIN_COOKIE,
-  //           httpOnly: false,
-  //           sameSite: "none",
-  //           secure: true,
-  //           maxAge: 15552000000
-  //       });
-    
-  //       return res.status(200).redirect(process.env.STEAM_REALM!);
-  //   }
-  // }
+//       const token = jwt.sign({
+//           steamid64: user.steamid64,
+//           avatar: user?.avatar,
+//           name: user?.name,
+//           user_id: user.id,
+//           dest: req.headers["x-forwarded-for"],
+//           mky: req.headers["user-agent"],
+//           exp: this.utilsService.currentTimestamp() + 15552000
+//       }, process.env.JWT_SECRET!);
+//       const cookie = req.cookies?.authentication;
+//       if (cookie)
+//           res.clearCookie("authentication", {
+//               domain: process.env.DOMAIN_COOKIE,
+//               httpOnly: false,
+//               sameSite: "none",
+//               secure: true,
+//               maxAge: 15552000000
+//           });
+//       res.cookie("authentication", token, {
+//           domain: process.env.DOMAIN_COOKIE,
+//           httpOnly: false,
+//           sameSite: "none",
+//           secure: true,
+//           maxAge: 15552000000
+//       });
 
-
-
-
-
+//       return res.status(200).redirect(process.env.STEAM_REALM!);
+//   }
+// }
 
 // import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 // import { AuthGuard } from '@nestjs/passport';
@@ -501,13 +452,13 @@ export class AuthController {
 //   @Get('steam')
 //   @UseGuards(AuthGuard('steam'))
 //   async steamLogin() {
-    
+
 //   }
 
 //   @Get('steam/return')
 //   @UseGuards(AuthGuard('steam'))
 //   steamReturn(@Req() req) {
-    
+
 //     return req.user;
 //   }
 // }
